@@ -1,28 +1,39 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { Pinecone } from '@pinecone-database/pinecone';
-import { pipeline } from '@xenova/transformers';
+import { OpenAI } from 'openai';
+
+// Route segment config for Vercel
+export const runtime = 'nodejs';
+export const maxDuration = 60; // 60 seconds for Vercel Pro, 10s for Hobby
 
 // Configuration
 const PINECONE_API_KEY = process.env.NEXT_PUBLIC_PINECONE_API_KEY;
 const PINECONE_INDEX_NAME = process.env.NEXT_PUBLIC_PINECONE_INDEX_NAME || "partner-use-cases";
-const EMBEDDING_MODEL = "Xenova/all-MiniLM-L6-v2";
+const OPENAI_API_KEY = process.env.NEXT_PUBLIC_OPENAI_API_KEY;
+const EMBEDDING_MODEL = "text-embedding-3-small"; // 1536 dimensions, or can be reduced to 512
 
-// Cache the embedding model
-let embeddingModel: any = null;
-
-async function getEmbeddingModel() {
-    if (!embeddingModel) {
-        console.log("Loading embedding model...");
-        embeddingModel = await pipeline('feature-extraction', EMBEDDING_MODEL);
-        console.log("Embedding model loaded");
-    }
-    return embeddingModel;
-}
+// Initialize OpenAI client
+const openai = new OpenAI({
+    apiKey: OPENAI_API_KEY,
+});
 
 async function generateEmbedding(text: string): Promise<number[]> {
-    const model = await getEmbeddingModel();
-    const output = await model(text, { pooling: 'mean', normalize: true });
-    return Array.from(output.data);
+    if (!OPENAI_API_KEY) {
+        throw new Error('OPENAI_API_KEY is not set');
+    }
+
+    try {
+        const response = await openai.embeddings.create({
+            model: EMBEDDING_MODEL,
+            input: text,
+            dimensions: 1536, // Use full dimensions (or 512 if you want smaller)
+        });
+
+        return response.data[0].embedding;
+    } catch (error: any) {
+        console.error('Error generating embedding:', error);
+        throw new Error(`Failed to generate embedding: ${error.message}`);
+    }
 }
 
 interface UseCase {
@@ -31,6 +42,14 @@ interface UseCase {
     url: string;
     text: string;
     score: number;
+}
+
+// GET handler for testing
+export async function GET() {
+    return NextResponse.json({
+        message: 'Use Cases API is running',
+        method: 'Use POST to search for use cases'
+    });
 }
 
 export async function POST(request: NextRequest) {
@@ -57,6 +76,13 @@ export async function POST(request: NextRequest) {
         if (!PINECONE_API_KEY) {
             return NextResponse.json(
                 { error: 'PINECONE_API_KEY is not set' },
+                { status: 500 }
+            );
+        }
+
+        if (!OPENAI_API_KEY) {
+            return NextResponse.json(
+                { error: 'OPENAI_API_KEY is not set' },
                 { status: 500 }
             );
         }
